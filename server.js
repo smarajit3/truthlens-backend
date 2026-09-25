@@ -40,53 +40,137 @@ async function generateJson(contents, fallback) {
 
   let lastError;
 
+  // 1. Try Gemini first
   for (const model of [...new Set(models)]) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          responseMimeType: "application/json"
+        }
+      });
+
+      const raw = cleanJsonText(response.text || "");
+
       try {
-        const response = await ai.models.generateContent({
-          model,
-          contents,
-          config: {
-            responseMimeType: "application/json"
-          }
-        });
+        return JSON.parse(raw);
+      } catch {
+        return fallback;
+      }
 
-        const raw = cleanJsonText(response.text || "");
+    } catch (error) {
+      lastError = error;
 
-        try {
-          return JSON.parse(raw);
-        } catch {
-          return fallback;
-        }
+      const message = String(error?.message || error || "");
 
-      } catch (error) {
-        lastError = error;
+      const quotaOrTemporary =
+        message.includes("429") ||
+        message.includes("RESOURCE_EXHAUSTED") ||
+        message.includes("503") ||
+        message.includes("UNAVAILABLE") ||
+        message.includes("high demand") ||
+        message.includes("temporarily");
 
-        const message = String(error?.message || error || "");
+      console.error(
+        `Gemini failed: model=${model}`,
+        message
+      );
 
-        const temporary =
-          message.includes("503") ||
-          message.includes("UNAVAILABLE") ||
-          message.includes("high demand") ||
-          message.includes("temporarily");
-
-        console.error(
-          `Gemini request failed: model=${model}, attempt=${attempt}`,
-          message
-        );
-
-        if (!temporary) {
-          throw error;
-        }
-
-        if (attempt < 2) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
-        }
+      // For normal errors, don't hide the problem.
+      if (!quotaOrTemporary) {
+        throw error;
       }
     }
   }
 
-  throw lastError || new Error("All Gemini models are temporarily unavailable.");
+  // 2. Gemini unavailable/quota exhausted → OpenRouter
+  if (process.env.OPENROUTER_API_KEY) {
+    try {
+      console.log("Gemini unavailable. Trying OpenRouter free fallback...");
+
+      const messages = contents.map(item => {
+        const parts = item.parts || [];
+
+        const content = parts.map(part => {
+          if (part.text) {
+            return {
+              type: "text",
+              text: part.text
+            };
+          }
+
+          if (part.inlineData) {
+            return {
+              type: "image_url",
+              image_url: {
+                url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
+              }
+            };
+          }
+
+          return null;
+        }).filter(Boolean);
+
+        return {
+          role: item.role === "model" ? "assistant" : "user",
+          content
+        };
+      });
+
+      const response = await fetch(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://smarajit3.github.io/truthlens/",
+            "X-Title": "TruthLens"
+          },
+          body: JSON.stringify({
+            model: "openrouter/free",
+            messages,
+            response_format: {
+              type: "json_object"
+            }
+          })
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error?.message ||
+          `OpenRouter request failed (${response.status})`
+        );
+      }
+
+      const text =
+        data?.choices?.[0]?.message?.content || "";
+
+      const raw = cleanJsonText(text);
+
+      try {
+        return JSON.parse(raw);
+      } catch {
+        console.error("OpenRouter returned invalid JSON.");
+        return fallback;
+      }
+
+    } catch (error) {
+      console.error(
+        "OpenRouter fallback failed:",
+        error?.message || error
+      );
+
+      lastError = error;
+    }
+  }
+
+  throw lastError ||
+    new Error("All AI providers are temporarily unavailable.");
 }
 
 app.get("/api/health", (_req, res) => {
