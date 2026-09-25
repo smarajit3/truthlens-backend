@@ -31,20 +31,62 @@ function cleanJsonText(text) {
 
 async function generateJson(contents, fallback) {
   const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents,
-    config: {
-      responseMimeType: "application/json"
-    }
-  });
 
-  const raw = cleanJsonText(response.text || "");
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
+  const models = [
+    MODEL,
+    "gemini-3.7-flash",
+    "gemini-3.5-flash-lite"
+  ];
+
+  let lastError;
+
+  for (const model of [...new Set(models)]) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            responseMimeType: "application/json"
+          }
+        });
+
+        const raw = cleanJsonText(response.text || "");
+
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return fallback;
+        }
+
+      } catch (error) {
+        lastError = error;
+
+        const message = String(error?.message || error || "");
+
+        const temporary =
+          message.includes("503") ||
+          message.includes("UNAVAILABLE") ||
+          message.includes("high demand") ||
+          message.includes("temporarily");
+
+        console.error(
+          `Gemini request failed: model=${model}, attempt=${attempt}`,
+          message
+        );
+
+        if (!temporary) {
+          throw error;
+        }
+
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+      }
+    }
   }
+
+  throw lastError || new Error("All Gemini models are temporarily unavailable.");
 }
 
 app.get("/api/health", (_req, res) => {
