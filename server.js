@@ -285,12 +285,43 @@ app.post("/api/evidence-search", async (req, res) => {
         .trim();
     };
 
-    const cleanSnippet = (value = "") => {
-      return String(value)
-      .replace(/https?:\/\/\S+/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    };
+  const cleanSnippet = (value = "", title = "", source = "") => {
+  let text = String(value)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Remove duplicated headline
+  if (title) {
+    text = text.replace(
+      new RegExp(
+        title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "gi"
+      ),
+      ""
+    );
+  }
+
+  // Remove duplicated publisher
+  if (source) {
+    text = text.replace(
+      new RegExp(
+        source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "gi"
+      ),
+      ""
+    );
+  }
+
+  return text.replace(/\s+/g, " ").trim();
+};
 
     const getTag = (item, tag) => {
       const match = item.match(
@@ -313,11 +344,22 @@ app.post("/api/evidence-search", async (req, res) => {
       if (items.length >= 10) break;
 
       const title = getTag(item, "title");
-      const link = getTag(item, "link");
-      const pubDate = getTag(item, "pubDate");
-      const description = cleanSnippet(
-        getTag(item, "description")
-      );
+const link = getTag(item, "link");
+const pubDate = getTag(item, "pubDate");
+
+const sourceMatch = item.match(
+  /<source[^>]*>([\s\S]*?)<\/source>/i
+);
+
+const source = sourceMatch
+  ? cleanText(sourceMatch[1])
+  : "";
+
+const description = cleanSnippet(
+  getTag(item, "description"),
+  title,
+  source
+);
        
 
       const sourceMatch = item.match(
