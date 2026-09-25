@@ -285,6 +285,13 @@ app.post("/api/evidence-search", async (req, res) => {
         .trim();
     };
 
+    const cleanSnippet = (value = "") => {
+      return String(value)
+      .replace(/https?:\/\/\S+/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    };
+
     const getTag = (item, tag) => {
       const match = item.match(
         new RegExp(
@@ -308,7 +315,10 @@ app.post("/api/evidence-search", async (req, res) => {
       const title = getTag(item, "title");
       const link = getTag(item, "link");
       const pubDate = getTag(item, "pubDate");
-      const description = getTag(item, "description");
+      const description = cleanSnippet(
+        getTag(item, "description")
+      );
+       
 
       const sourceMatch = item.match(
         /<source[^>]*>([\s\S]*?)<\/source>/i
