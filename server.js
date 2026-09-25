@@ -238,12 +238,25 @@ Do not invent missing text. Do not decide whether claims are true or false at th
 app.post("/api/evidence-search", async (req, res) => {
   try {
     const { claim } = req.body || {};
-    if (!claim || !String(claim).trim()) {
-      return res.status(400).json({ error: "claim is required." });
+
+    const cleanClaim = String(claim || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!cleanClaim) {
+      return res.status(400).json({
+        error: "claim is required."
+      });
     }
 
-    const query = encodeURIComponent(String(claim).trim());
-    const rssUrl = `https://news.google.com/rss/search?q=${query}&hl=en-IN&gl=IN&ceid=IN:en`;
+    const query = encodeURIComponent(cleanClaim);
+
+    const rssUrl =
+      `https://news.google.com/rss/search` +
+      `?q=${query}` +
+      `&hl=en-IN` +
+      `&gl=IN` +
+      `&ceid=IN:en`;
 
     const response = await fetch(rssUrl, {
       headers: {
@@ -252,42 +265,107 @@ app.post("/api/evidence-search", async (req, res) => {
     });
 
     if (!response.ok) {
-      throw new Error(`Google News RSS returned HTTP ${response.status}`);
+      throw new Error(
+        `Google News RSS returned HTTP ${response.status}`
+      );
     }
 
     const xml = await response.text();
 
-    const items = [];
-    const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/gi) || [];
-
-    for (const item of itemMatches.slice(0, 10)) {
-      const getTag = (tag) => {
-        const match = item.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, "i"));
-        return match ? match[1] : "";
-      };
-
-      const title = getTag("title")
-        .replace(/<!\[CDATA\[(.*?)\]\]>/g, "$1")
+    const cleanText = (value = "") => {
+      return String(value)
+        .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1")
+        .replace(/<[^>]*>/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/\s+/g, " ")
         .trim();
+    };
 
-      const link = getTag("link").trim();
-      const pubDate = getTag("pubDate").trim();
-      const sourceMatch = item.match(/<source[^>]*>([\s\S]*?)<\/source>/i);
-      const source = sourceMatch ? sourceMatch[1].trim() : "";
+    const getTag = (item, tag) => {
+      const match = item.match(
+        new RegExp(
+          `<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`,
+          "i"
+        )
+      );
 
-      if (title) {
-        items.push({ title, source, link, pubDate });
-      }
+      return match ? cleanText(match[1]) : "";
+    };
+
+    const itemMatches =
+      xml.match(/<item>([\s\S]*?)<\/item>/gi) || [];
+
+    const items = [];
+    const seenLinks = new Set();
+
+    for (const item of itemMatches) {
+      if (items.length >= 10) break;
+
+      const title = getTag(item, "title");
+      const link = getTag(item, "link");
+      const pubDate = getTag(item, "pubDate");
+      const description = getTag(item, "description");
+
+      const sourceMatch = item.match(
+        /<source[^>]*>([\s\S]*?)<\/source>/i
+      );
+
+      const source = sourceMatch
+        ? cleanText(sourceMatch[1])
+        : "";
+
+      if (!title || !link) continue;
+
+      if (seenLinks.has(link)) continue;
+      seenLinks.add(link);
+
+      items.push({
+        index: items.length,
+        title,
+        source,
+        link,
+        pubDate,
+        snippet: description
+      });
     }
 
     res.json({
-      query: String(claim).trim(),
+      query: cleanClaim,
+
       evidence: items,
-      note: "Google News RSS is used for evidence discovery. Headlines are not proof by themselves; open and assess the underlying sources."
+
+      evidenceQuality: {
+        type: "discovery",
+        verifiedArticleContent: false,
+        headlineOnly: items.every(
+          item => !item.snippet
+        )
+      },
+
+      note:
+        "These results are evidence-discovery sources. " +
+        "Headlines and snippets are not proof by themselves. " +
+        "TruthLens should assess the underlying articles before " +
+        "classifying a claim as supported or contradicted.",
+
+      searchedAt: new Date().toISOString()
     });
+
   } catch (error) {
-    console.error("evidence-search error:", error);
-    res.status(500).json({ error: error.message || "Evidence search failed." });
+    console.error(
+      "evidence-search error:",
+      error
+    );
+
+    res.status(500).json({
+      error:
+        error.message ||
+        "Evidence search failed."
+    });
   }
 });
 
