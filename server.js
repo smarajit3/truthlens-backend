@@ -355,12 +355,7 @@ const source = sourceMatch
   ? cleanText(sourceMatch[1])
   : "";
 
-const description = cleanSnippet(
-  getTag(item, "description"),
-  title,
-  source
-);
-       
+  
 
       const sourceMatch = item.match(
         /<source[^>]*>([\s\S]*?)<\/source>/i
@@ -380,8 +375,7 @@ const description = cleanSnippet(
         title,
         source,
         link,
-        pubDate,
-        snippet: description
+        pubDate
       });
     }
 
